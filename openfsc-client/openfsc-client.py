@@ -1,7 +1,7 @@
 import asyncio
-from email import message
-import websockets
 import logging
+
+import websockets
 
 logger = logging.getLogger('websockets')
 logger.setLevel(logging.INFO)
@@ -48,13 +48,24 @@ def produce_charset_message():
 
 
 def parse_message(m):
-    chunks = m.split()
-    for c in chunks:
-        print(str(c))
+    chunks = m.rstrip().split(maxsplit=1)
+    seq = chunks.pop(0)
+    if str(seq).startswith('*'):
+        # Notification
+        print(f'< [notification] {chunks}')
+    elif str(seq).startswith('C'):
+        # Response
+        response_id = seq[1:]
+        print(f'< [response #{response_id}] {chunks}')
+    elif str(seq).startswith('S'):
+        # Server Request
+        request_id = seq[1:]
+        print(f'< [server request #{request_id}] {chunks}')
+    else:
+        print(f'ERROR: message cannot be parsed: {m}')
 
 
 def consumer(m):
-    print('< ' + m)
     parse_message(m)
     return
 
