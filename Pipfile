@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 asyncio = "*"
 websockets = "*"
+datetime = "*"
 
 [dev-packages]
 autopep8 = "*"
