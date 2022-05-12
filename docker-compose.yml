@@ -3,3 +3,4 @@ version: "3.9"
 services:
   openfsc-client-python:
     build: .
+    container_name: openfsc-client
