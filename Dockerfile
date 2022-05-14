@@ -1,4 +1,4 @@
-FROM python:3.9-alpine
+FROM python:3.9-slim-buster
 LABEL maintainer="jp@pace.car"
 
 ENV PYTHONDONTWRITEBYTECODE=1
