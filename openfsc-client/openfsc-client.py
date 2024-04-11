@@ -10,12 +10,13 @@ class OpenFscClient:
     logger.setLevel(logging.INFO)
     logger.addHandler(logging.StreamHandler())
 
-    fsc_url = 'wss://fsc.sandbox.k8s.pacelink.net/ws/text'
+    fsc_url = 'wss://fsc.sandbox.euca.pacelink.net/ws/text'
 
     client_supported_fsc_capabilities = {
         'CLEAR',
         'HEARTBEAT',
         'LOCKPUMP',
+        'PRODUCTS',
         'PRICES',
         'PUMPS',
         'PUMPSTATUS',
