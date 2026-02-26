@@ -11,4 +11,4 @@ COPY Pipfile Pipfile.lock ./
 COPY openfsc-client ./openfsc-client/
 RUN pipenv install --deploy
 
-CMD ["pipenv", "run", "python3", "openfsc-client/openfsc-client.py"]
+CMD ["pipenv", "run", "python3", "openfsc-client/main.py"]
