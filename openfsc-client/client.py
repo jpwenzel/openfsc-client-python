@@ -3,6 +3,7 @@ from importlib import import_module
 from typing import Any
 
 from config import OpenFscConfig
+from pos_adapter import PosAdapter
 from protocol import ProtocolMessage, now_rfc3339_utc, parse_message, serialize_message
 from state import ConnectionState
 
@@ -10,7 +11,7 @@ websockets = import_module('websockets')
 
 
 class OpenFscClient:
-    def __init__(self, config: OpenFscConfig):
+    def __init__(self, config: OpenFscConfig, pos_adapter: PosAdapter):
         self.logger = logging.getLogger('openfsc-client')
         self.logger.setLevel(logging.INFO)
         self.logger.addHandler(logging.StreamHandler())
@@ -18,6 +19,7 @@ class OpenFscClient:
         self.fsc_url = config.fsc_url
         self.site_access_key = config.site_access_key
         self.site_secret = config.site_secret
+        self.pos_adapter = pos_adapter
 
         self.client_supported_fsc_capabilities = sorted({
             'CLEAR',
@@ -160,7 +162,198 @@ class OpenFscClient:
             await self.send_err(message.tag, 403, 'Wrong connection state')
             return
 
-        await self.send_err(message.tag, 405, f'Method {message.method} not implemented in Milestone A')
+        # Dispatch to authenticated handlers
+        if message.method == 'PRICES':
+            await self.handle_prices_request(message.tag)
+        elif message.method == 'PUMPS':
+            await self.handle_pumps_request(message.tag)
+        elif message.method == 'PUMPSTATUS':
+            await self.handle_pumpstatus_request(message.tag, message.args)
+        elif message.method == 'TRANSACTIONS':
+            await self.handle_transactions_request(message.tag, message.args)
+        elif message.method == 'UNLOCKPUMP':
+            await self.handle_unlockpump_request(message.tag, message.args)
+        elif message.method == 'LOCKPUMP':
+            await self.handle_lockpump_request(message.tag, message.args)
+        elif message.method == 'CLEAR':
+            await self.handle_clear_request(message.tag, message.args)
+        else:
+            await self.send_err(message.tag, 405, f'Method {message.method} unknown')
+
+    async def handle_prices_request(self, tag: str):
+        """Handle PRICES request - send PRICE notifications for all products."""
+        products = self.pos_adapter.get_products()
+        for product in products:
+            await self.send_notification(
+                'PRICE',
+                product.product_id,
+                product.unit,
+                product.currency,
+                f'{product.price_per_unit:.3f}',
+                product.description,
+            )
+        await self.send_ok(tag)
+
+    async def handle_pumps_request(self, tag: str):
+        """Handle PUMPS request - send PUMP notifications for all pumps."""
+        pumps = self.pos_adapter.get_pumps()
+        for pump in pumps:
+            await self.send_notification('PUMP', str(pump.pump_number), pump.status)
+        await self.send_ok(tag)
+
+    async def handle_pumpstatus_request(self, tag: str, args: list[str]):
+        """Handle PUMPSTATUS request - send PUMP notification for specific pump."""
+        if len(args) < 1:
+            await self.send_err(tag, 400, 'Bad request: missing pump number')
+            return
+
+        try:
+            pump_number = int(args[0])
+        except ValueError:
+            await self.send_err(tag, 400, 'Bad request: invalid pump number')
+            return
+
+        # Optional UpdateTTL parameter
+        update_ttl = None
+        if len(args) >= 2:
+            try:
+                update_ttl = int(args[1])
+                if update_ttl < 30 or update_ttl > 300:
+                    await self.send_err(tag, 416, 'UpdateTTL is too large or too low (valid range 30 - 300)')
+                    return
+            except ValueError:
+                await self.send_err(tag, 400, 'Bad request: invalid UpdateTTL')
+                return
+
+        pump = self.pos_adapter.get_pump_status(pump_number)
+        if pump is None:
+            await self.send_err(tag, 404, 'Pump unknown')
+            return
+
+        await self.send_notification('PUMP', str(pump.pump_number), pump.status)
+        await self.send_ok(tag)
+
+        # TODO: Implement TTL-based update subscription in Milestone C
+
+    async def handle_transactions_request(self, tag: str, args: list[str]):
+        """Handle TRANSACTIONS request - send TRANSACTION notifications."""
+        pump_number = None
+        update_ttl = None
+
+        if len(args) >= 1:
+            try:
+                pump_number = int(args[0])
+            except ValueError:
+                await self.send_err(tag, 400, 'Bad request: invalid pump number')
+                return
+
+            # Check if pump exists
+            pump = self.pos_adapter.get_pump_status(pump_number)
+            if pump is None:
+                await self.send_err(tag, 404, 'Pump unknown')
+                return
+
+        if len(args) >= 2:
+            try:
+                update_ttl = int(args[1])
+                if update_ttl < 30 or update_ttl > 300:
+                    await self.send_err(tag, 416, 'UpdateTTL is too large or too low (valid range 30 - 300)')
+                    return
+            except ValueError:
+                await self.send_err(tag, 400, 'Bad request: invalid UpdateTTL')
+                return
+
+            if pump_number is None:
+                await self.send_err(tag, 400, 'UpdateTTL requires pump number')
+                return
+
+        transactions = self.pos_adapter.get_transactions(pump_number)
+        for tx in transactions:
+            await self.send_notification(
+                'TRANSACTION',
+                str(tx.pump_number),
+                tx.site_transaction_id,
+                tx.status,
+                tx.product_id,
+                tx.currency,
+                f'{tx.price_with_vat:.2f}',
+                f'{tx.price_without_vat:.2f}',
+                f'{tx.vat_rate:.1f}',
+                f'{tx.vat_amount:.2f}',
+                tx.unit,
+                f'{tx.volume:.2f}',
+                f'{tx.price_per_unit:.3f}',
+            )
+        await self.send_ok(tag)
+
+        # TODO: Implement TTL-based update subscription in Milestone C
+
+    async def handle_unlockpump_request(self, tag: str, args: list[str]):
+        """Handle UNLOCKPUMP request - unlock pump for pre-auth fueling."""
+        if len(args) < 5:
+            await self.send_err(tag, 400, 'Bad request: missing required arguments')
+            return
+
+        try:
+            pump_number = int(args[0])
+            currency = args[1]
+            credit = float(args[2])
+            fsc_transaction_id = args[3]
+            payment_method = args[4]
+            product_ids = args[5:] if len(args) > 5 else None
+        except (ValueError, IndexError):
+            await self.send_err(tag, 400, 'Bad request: invalid arguments')
+            return
+
+        result = self.pos_adapter.unlock_pump(
+            pump_number, currency, credit, fsc_transaction_id, payment_method, product_ids
+        )
+
+        if result.success:
+            await self.send_ok(tag)
+        else:
+            await self.send_err(tag, result.error_code or 500, result.error_message or 'Internal server error')
+
+    async def handle_lockpump_request(self, tag: str, args: list[str]):
+        """Handle LOCKPUMP request - cancel/lock pump."""
+        if len(args) < 1:
+            await self.send_err(tag, 400, 'Bad request: missing pump number')
+            return
+
+        try:
+            pump_number = int(args[0])
+        except ValueError:
+            await self.send_err(tag, 400, 'Bad request: invalid pump number')
+            return
+
+        result = self.pos_adapter.lock_pump(pump_number)
+
+        if result.success:
+            await self.send_ok(tag)
+        else:
+            await self.send_err(tag, result.error_code or 500, result.error_message or 'Internal server error')
+
+    async def handle_clear_request(self, tag: str, args: list[str]):
+        """Handle CLEAR request - clear/complete transaction."""
+        if len(args) < 4:
+            await self.send_err(tag, 400, 'Bad request: missing required arguments')
+            return
+
+        try:
+            pump_number = int(args[0])
+            site_transaction_id = args[1]
+            fsc_transaction_id = args[2]
+            payment_method = args[3]
+        except (ValueError, IndexError):
+            await self.send_err(tag, 400, 'Bad request: invalid arguments')
+            return
+
+        result = self.pos_adapter.clear_transaction(pump_number, site_transaction_id, fsc_transaction_id, payment_method)
+
+        if result.success:
+            await self.send_ok(tag)
+        else:
+            await self.send_err(tag, result.error_code or 500, result.error_message or 'Internal server error')
 
     async def handle_incoming(self, raw: str):
         try:

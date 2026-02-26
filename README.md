@@ -34,3 +34,11 @@ The project uses Docker Compose and installs its Python dependencies in the `ope
 ### Unauthenticated Mode
 
 If credentials are not set in `.env`, the client stays connected in unauthenticated mode and only responds to `HEARTBEAT` requests.
+
+## Run tests
+
+Run unit tests locally:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
