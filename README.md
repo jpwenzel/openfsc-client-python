@@ -4,15 +4,33 @@
 
 The project uses Docker Compose and installs its Python dependencies in the `openfsc-client-python` container.
 
-Set environment variables for authenticated mode:
+### Configuration
 
-- `OPENFSC_SITE_ACCESS_KEY`
-- `OPENFSC_SITE_SECRET`
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
 
-Optional:
+2. Edit `.env` and set your credentials:
+   - `OPENFSC_SITE_ACCESS_KEY` - Your site access key (UUID)
+   - `OPENFSC_SITE_SECRET` - Your site secret
+   - `OPENFSC_URL` (optional) - Server URL (defaults to sandbox)
 
-- `OPENFSC_URL` (defaults to `wss://fsc.sandbox.euca.pacelink.net/ws/text`)
+3. Start the container:
+   ```bash
+   docker compose up -d --build
+   ```
 
-Then run `docker-compose build && docker-compose up`.
+4. View logs:
+   ```bash
+   docker compose logs -f openfsc-client-python
+   ```
 
-If credentials are not set, the client stays connected in unauthenticated mode and only responds to `HEARTBEAT` requests.
+5. Stop the container:
+   ```bash
+   docker compose down
+   ```
+
+### Unauthenticated Mode
+
+If credentials are not set in `.env`, the client stays connected in unauthenticated mode and only responds to `HEARTBEAT` requests.
