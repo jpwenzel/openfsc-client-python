@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+import time
 
 import websockets
 
@@ -59,7 +60,27 @@ class OpenFscClient:
     async def produce_and_send_heartbeat_response_message(self, request_id):
         timestamp = datetime.now(
             tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        message = f'S{request_id} BEAT {timestamp}'
+        message = f"S{request_id} BEAT {timestamp}"
+        print(f'> [C-RES #{request_id:5}] {message}')
+        await self.send_message(self.create_ws_message(message))
+        return
+    
+    def produce_beat_notification(self):
+        timestamp = datetime.now(
+            tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        m = f"* BEAT {timestamp}"
+        print(f'> [C-NOTIF     ] {m}')
+        return m
+
+    async def handle_incoming_message(self, request_id, request_message):
+        # Default response
+        response = 'ERR Not implemented'
+        
+        # Report no transactions for now
+        if str(request_message).startswith('TRANSACTIONS'):
+            response = 'OK'
+
+        message = f'S{request_id} {response}'
         print(f'> [C-RES #{request_id:5}] {message}')
         await self.send_message(self.create_ws_message(message))
         return
@@ -86,6 +107,9 @@ class OpenFscClient:
             if request_message.startswith('HEARTBEAT'):
                 await self.produce_and_send_heartbeat_response_message(request_id)
                 return
+            else:
+                await self.handle_incoming_message(request_id, request_message)
+                return
         else:
             print(f'ERROR: message cannot be parsed: {m}')
             return
@@ -99,6 +123,11 @@ class OpenFscClient:
         await websocket.send(self.create_ws_message(message))
 
         message = self.produce_charset_message()
+        await websocket.send(self.create_ws_message(message))
+
+        time.sleep(25)
+
+        message = self.produce_beat_notification()
         await websocket.send(self.create_ws_message(message))
 
     async def consumer_handler(self, websocket):
