@@ -4,3 +4,4 @@ services:
   openfsc-client-python:
     build: .
     container_name: openfsc-client
+    restart: unless-stopped

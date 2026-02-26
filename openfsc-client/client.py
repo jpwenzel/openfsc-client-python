@@ -36,6 +36,7 @@ class OpenFscClient:
         self.server_capabilities: set[str] = set()
         self.state = ConnectionState.DISCONNECTED
         self.ws_connection: Any | None = None
+        self.auth_skipped = False
 
     def next_client_tag(self) -> str:
         tag = f'C{self.tagged_message_counter}'
@@ -85,9 +86,11 @@ class OpenFscClient:
 
     async def send_plainauth_request(self):
         if not self.site_access_key or not self.site_secret:
-            self.logger.error('Missing OPENFSC_SITE_ACCESS_KEY or OPENFSC_SITE_SECRET for PLAINAUTH')
-            await self.send_notification('QUIT', 'Missing credentials')
-            await self.require_connection().close()
+            self.auth_skipped = True
+            self.logger.warning(
+                'Missing OPENFSC_SITE_ACCESS_KEY or OPENFSC_SITE_SECRET; running in unauthenticated mode '
+                '(HEARTBEAT/BEAT only until credentials are provided)'
+            )
             return
         await self.send_request('plainauth', 'PLAINAUTH', self.site_access_key, self.site_secret)
 
@@ -144,10 +147,6 @@ class OpenFscClient:
     async def handle_server_request(self, message: ProtocolMessage):
         self.logger.info('< [S-REQ #%5s] %s %s', message.tag[1:], message.method, ' '.join(message.args).strip())
 
-        if self.state != ConnectionState.AUTHENTICATED:
-            await self.send_err(message.tag, 403, 'Wrong connection state')
-            return
-
         if message.method == 'HEARTBEAT':
             if len(message.args) != 1:
                 await self.send_err(message.tag, 422, 'Timestamp invalid')
@@ -155,6 +154,10 @@ class OpenFscClient:
 
             await self.send(ProtocolMessage(message.tag, 'BEAT', [now_rfc3339_utc()]))
             await self.send_ok(message.tag)
+            return
+
+        if self.state != ConnectionState.AUTHENTICATED:
+            await self.send_err(message.tag, 403, 'Wrong connection state')
             return
 
         await self.send_err(message.tag, 405, f'Method {message.method} not implemented in Milestone A')
@@ -187,6 +190,7 @@ class OpenFscClient:
             self.tagged_message_counter = 0
             self.pending_requests = {}
             self.server_capabilities = set()
+            self.auth_skipped = False
 
             await self.start_handshake()
 
