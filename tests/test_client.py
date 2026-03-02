@@ -25,13 +25,13 @@ load_module('config', 'config.py')
 load_module('state', 'state.py')
 protocol_module = load_module('protocol', 'protocol.py')
 load_module('pos_adapter', 'pos_adapter.py')
-logging_pos_adapter_module = load_module('logging_pos_adapter', 'logging_pos_adapter.py')
+example_pos_adapter_module = load_module('example_pos_adapter', 'example_pos_adapter.py')
 sys.modules.setdefault('websockets', types.SimpleNamespace(connect=None))
 client_module = load_module('client', 'client.py')
 
 OpenFscClient = client_module.OpenFscClient
 OpenFscConfig = sys.modules['config'].OpenFscConfig
-LoggingPosAdapter = logging_pos_adapter_module.LoggingPosAdapter
+ExamplePosAdapter = example_pos_adapter_module.ExamplePosAdapter
 ProtocolMessage = protocol_module.ProtocolMessage
 parse_message = protocol_module.parse_message
 ConnectionState = sys.modules['state'].ConnectionState
@@ -56,7 +56,7 @@ class ClientHandlerTests(unittest.TestCase):
             site_access_key=access_key,
             site_secret=secret,
         )
-        client = OpenFscClient(config, LoggingPosAdapter())
+        client = OpenFscClient(config, ExamplePosAdapter())
         client.ws_connection = FakeWebSocket()
         return client
 

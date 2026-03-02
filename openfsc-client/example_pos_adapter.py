@@ -12,8 +12,8 @@ from pos_adapter import (
 )
 
 
-class LoggingPosAdapter(PosAdapter):
-    """Stub POS adapter that returns fake data and logs all operations."""
+class ExamplePosAdapter(PosAdapter):
+    """Example POS adapter that returns fake data and logs all operations."""
 
     def __init__(self):
         self.logger = logging.getLogger('pos-adapter')

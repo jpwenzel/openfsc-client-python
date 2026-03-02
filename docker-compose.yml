@@ -9,3 +9,4 @@ services:
       - OPENFSC_URL=${OPENFSC_URL:-wss://fsc.sandbox.euca.pacelink.net/ws/text}
       - OPENFSC_SITE_ACCESS_KEY=${OPENFSC_SITE_ACCESS_KEY}
       - OPENFSC_SITE_SECRET=${OPENFSC_SITE_SECRET}
+      - POS_ADAPTER_CLASS=${POS_ADAPTER_CLASS:-example_pos_adapter.ExamplePosAdapter}
