@@ -230,6 +230,10 @@ class OpenFscClient:
             await self.send_err(tag, 400, 'Bad request: invalid pump number')
             return
 
+        on_pumpstatus_requested = getattr(self.pos_adapter, 'on_pumpstatus_requested', None)
+        if callable(on_pumpstatus_requested):
+            on_pumpstatus_requested(pump_number)
+
         # Optional UpdateTTL parameter
         update_ttl = None
         if len(args) >= 2:
