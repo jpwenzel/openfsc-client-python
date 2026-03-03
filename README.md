@@ -112,6 +112,22 @@ Run unit tests locally:
 python3 -m unittest discover -s tests -v
 ```
 
+## Simulator behavior (example adapter)
+
+The example setup includes a simulator (`openfsc-client/example_pos_simulator.py`) used by `ExamplePosAdapter`.
+
+### Price updates
+
+- Prices for gasoline and Diesel fuels are updated in the background at random intervals (roughly every 15–45 seconds).
+- Price changes move up or down by a few cents.
+- Products currently involved in an active fueling/payment flow are not changed.
+
+### Simulated user traffic
+
+- Traffic simulation runs for pumps `11`, `12`, and `13`.
+- New ready-to-pay transactions are generated at random intervals (roughly every 10–60 seconds) on eligible pumps.
+- If not picked for mobile payment, the transactions are auto-closed as “paid in-store”.
+
 ## POS Adapter extensibility
 
 The client is designed to accept any implementation of `PosAdapter`.
