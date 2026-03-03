@@ -19,6 +19,7 @@ class ExamplePosSimulator:
         create_transaction_for_pump: Callable[[int], Transaction],
         create_transaction_for_unlock: Callable[[int, str, float, list[str] | None], Transaction],
         notify_completed_unlock_transaction: Callable[[Transaction], None] | None = None,
+        notify_pump_status_changed: Callable[[int, str], None] | None = None,
     ):
         self.logger = logger
         self._state_lock = state_lock
@@ -29,6 +30,7 @@ class ExamplePosSimulator:
         self._create_transaction_for_pump = create_transaction_for_pump
         self._create_transaction_for_unlock = create_transaction_for_unlock
         self._notify_completed_unlock_transaction = notify_completed_unlock_transaction
+        self._notify_pump_status_changed = notify_pump_status_changed
         self._initial_prices = {product.product_id: product.price_per_unit for product in self.products}
         self._price_simulation_thread: threading.Thread | None = None
         self._pump_traffic_simulation_thread: threading.Thread | None = None
@@ -100,8 +102,10 @@ class ExamplePosSimulator:
             )
             started_at = time.monotonic()
             fueling_seconds = max(1.0, float(transaction.volume) / 1.0)
+            free_seconds = float(random.randint(1, 15))
+            in_use_at = started_at + free_seconds
 
-            self.pump_states[pump_number] = 'in-use'
+            self.pump_states[pump_number] = 'free'
             self.open_transactions.pop(pump_number, None)
             self._selection_deadline_by_pump.pop(pump_number, None)
             self._fallback_deadline_by_pump.pop(pump_number, None)
@@ -109,15 +113,31 @@ class ExamplePosSimulator:
             self._pending_unlock_notification_by_pump.pop(pump_number, None)
             self._pending_unlock_by_pump[pump_number] = {
                 'transaction': transaction,
-                'started_at': started_at,
-                'complete_at': started_at + fueling_seconds,
-                'next_progress_log_at': started_at + 5.0,
+                'in_use_at': in_use_at,
+                'started_at': in_use_at,
+                'complete_at': in_use_at + fueling_seconds,
+                'next_progress_log_at': in_use_at + 5.0,
             }
+            self.logger.info('[POS] pump %d pump unlocked (free)', pump_number)
 
     def on_pump_locked(self, pump_number: int):
         with self._state_lock:
             self._pending_unlock_by_pump.pop(pump_number, None)
             self._pending_unlock_notification_by_pump.pop(pump_number, None)
+
+    def _emit_pump_status_changed(self, pump_number: int, status: str):
+        notify_callback = self._notify_pump_status_changed
+        if notify_callback is None:
+            return
+
+        try:
+            notify_callback(pump_number, status)
+        except Exception:
+            self.logger.exception(
+                '[POS] failed to emit PUMP status notification for pump %d (%s)',
+                pump_number,
+                status,
+            )
 
     def _price_simulation_loop(self):
         while not self._stop_event.is_set():
@@ -206,8 +226,16 @@ class ExamplePosSimulator:
 
         completed_pumps: list[int] = []
         due_notifications: list[Transaction] = []
+        due_pump_status_notifications: list[tuple[int, str]] = []
         with self._state_lock:
             for pump_number, unlock_data in list(self._pending_unlock_by_pump.items()):
+                in_use_at = unlock_data.get('in_use_at')
+                if isinstance(in_use_at, (int, float)) and now >= in_use_at:
+                    if self.pump_states.get(pump_number) != 'in-use':
+                        self.pump_states[pump_number] = 'in-use'
+                        self.logger.info('[POS] pump %d nozzle lifted (in-use)', pump_number)
+                        due_pump_status_notifications.append((pump_number, 'in-use'))
+
                 complete_at = unlock_data.get('complete_at')
                 if not isinstance(complete_at, (int, float)) or now < complete_at:
                     started_at = unlock_data.get('started_at')
@@ -293,6 +321,9 @@ class ExamplePosSimulator:
                         '[POS] failed to emit completed pre-auth transaction notification for pump %d',
                         transaction.pump_number,
                     )
+
+        for pump_number, status in due_pump_status_notifications:
+            self._emit_pump_status_changed(pump_number, status)
 
     def _run_pump_traffic_simulation_tick(self, now: float | None = None):
         if now is None:

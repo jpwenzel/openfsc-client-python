@@ -30,6 +30,7 @@ class ExamplePosAdapter(PosAdapter):
         self._state_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._transaction_notification_handler: Callable[[Transaction], None] | None = None
+        self._pump_status_notification_handler: Callable[[int, str], None] | None = None
 
         self.products: list[Product] = [
             Product(
@@ -134,6 +135,7 @@ class ExamplePosAdapter(PosAdapter):
             create_transaction_for_pump=self._create_random_ready_to_pay_transaction,
             create_transaction_for_unlock=self._create_unlock_transaction,
             notify_completed_unlock_transaction=self._on_completed_unlock_transaction,
+            notify_pump_status_changed=self._on_pump_status_changed,
         )
         self._simulator.start_price_simulation()
         self._simulator.start_pump_traffic_simulation()
@@ -142,10 +144,18 @@ class ExamplePosAdapter(PosAdapter):
     def set_transaction_notification_handler(self, handler: Callable[[Transaction], None]):
         self._transaction_notification_handler = handler
 
+    def set_pump_status_notification_handler(self, handler: Callable[[int, str], None]):
+        self._pump_status_notification_handler = handler
+
     def _on_completed_unlock_transaction(self, transaction: Transaction):
         handler = self._transaction_notification_handler
         if callable(handler):
             handler(transaction)
+
+    def _on_pump_status_changed(self, pump_number: int, status: str):
+        handler = self._pump_status_notification_handler
+        if callable(handler):
+            handler(pump_number, status)
 
     def _next_site_transaction_id(self) -> str:
         return f'TX-{date.today().isoformat()}-{random.randint(0, 999999):06d}'

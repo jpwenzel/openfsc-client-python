@@ -276,18 +276,35 @@ class ExamplePosSimulatorTests(unittest.TestCase):
 
         self.assertEqual(simulator._creation_not_before_by_pump[11], 1017.0)
 
-    def test_unlock_authorized_moves_pump_to_in_use(self):
+    def test_unlock_authorized_keeps_pump_free_until_delay(self):
         simulator, pump_states, open_transactions, _ = self.create_simulator()
 
         pump_states[1] = 'locked'
         with mock.patch.object(simulator_module.time, 'monotonic', return_value=1000.0):
-            simulator.on_unlock_pump_authorized(1, 'fsc-123', 15.0, None)
+            with mock.patch.object(simulator_module.random, 'randint', return_value=3):
+                simulator.on_unlock_pump_authorized(1, 'fsc-123', 15.0, None)
 
-        self.assertEqual(pump_states[1], 'in-use')
+        self.assertEqual(pump_states[1], 'free')
         self.assertIn(1, simulator._pending_unlock_by_pump)
         self.assertNotIn(1, open_transactions)
+        self.assertAlmostEqual(simulator._pending_unlock_by_pump[1]['in_use_at'], 1003.0, places=3)
+        self.assertAlmostEqual(simulator._pending_unlock_by_pump[1]['started_at'], 1003.0, places=3)
         complete_at = simulator._pending_unlock_by_pump[1]['complete_at']
-        self.assertAlmostEqual(complete_at, 1005.0, places=3)
+        self.assertAlmostEqual(complete_at, 1008.0, places=3)
+
+    def test_unlock_flow_transitions_from_free_to_in_use_after_delay(self):
+        simulator, pump_states, _, _ = self.create_simulator()
+
+        pump_states[1] = 'locked'
+        with mock.patch.object(simulator_module.time, 'monotonic', return_value=1000.0):
+            with mock.patch.object(simulator_module.random, 'randint', return_value=2):
+                simulator.on_unlock_pump_authorized(1, 'fsc-delay', 15.0, None)
+
+        simulator._run_unlock_flow_tick(now=1001.0)
+        self.assertEqual(pump_states[1], 'free')
+
+        simulator._run_unlock_flow_tick(now=1002.0)
+        self.assertEqual(pump_states[1], 'in-use')
 
     def test_unlock_flow_logs_progress_every_5_seconds(self):
         simulator, pump_states, _, _ = self.create_simulator()
@@ -337,23 +354,26 @@ class ExamplePosSimulatorTests(unittest.TestCase):
 
         pump_states[1] = 'locked'
         with mock.patch.object(simulator_module.time, 'monotonic', return_value=1000.0):
-            simulator.on_unlock_pump_authorized(1, 'fsc-789', 15.0, ['0100'])
+            with mock.patch.object(simulator_module.random, 'randint', return_value=1):
+                simulator.on_unlock_pump_authorized(1, 'fsc-789', 15.0, ['0100'])
 
-        simulator._run_unlock_flow_tick(now=1005.0)
+        simulator._run_unlock_flow_tick(now=1005.9)
+        self.assertEqual(pump_states[1], 'in-use')
+        self.assertNotIn(1, open_transactions)
+        self.assertEqual(len(notifications), 0)
+
+        simulator._run_unlock_flow_tick(now=1006.0)
         self.assertEqual(pump_states[1], 'locked')
         self.assertIn(1, open_transactions)
         self.assertEqual(len(notifications), 0)
 
-        simulator._run_unlock_flow_tick(now=1005.9)
-        self.assertEqual(len(notifications), 0)
-
-        simulator._run_unlock_flow_tick(now=1006.0)
+        simulator._run_unlock_flow_tick(now=1007.0)
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].site_transaction_id, 'fsc-789')
         self.assertIn(1, open_transactions)
         self.assertEqual(pump_states[1], 'locked')
 
-        simulator._run_unlock_flow_tick(now=1008.1)
+        simulator._run_unlock_flow_tick(now=1009.1)
         self.assertNotIn(1, open_transactions)
         self.assertEqual(pump_states[1], 'locked')
 

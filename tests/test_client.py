@@ -239,7 +239,7 @@ class ClientHandlerTests(unittest.TestCase):
         self.run_async(client.handle_incoming('S21 PUMPSTATUS 1\r\n'))
         sent = self.parse_sent(client)
         self.assertEqual(sent[0].method, 'PUMP')
-        self.assertEqual(sent[0].args, ['1', 'in-use'])
+        self.assertEqual(sent[0].args, ['1', 'free'])
         self.assertEqual(sent[1].tag, 'S21')
         self.assertEqual(sent[1].method, 'OK')
 
@@ -276,6 +276,36 @@ class ClientHandlerTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0].tag, 'S24')
         self.assertEqual(sent[0].method, 'OK')
+
+    def test_integration_unlockpump_in_use_transition_sends_pump_notification(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+        fsc_transaction_id = '06db6b40-87ea-44a0-a4bb-7c7939635eaf'
+
+        self.run_async(
+            client.handle_incoming(
+                f'S50 UNLOCKPUMP 1 EUR 15.0 {fsc_transaction_id} pace\r\n'
+            )
+        )
+
+        adapter = client.pos_adapter
+        with adapter._state_lock:
+            adapter._simulator._pending_unlock_by_pump[1]['in_use_at'] = 0.0
+
+        client.ws_connection.sent = []
+
+        async def run_unlock_tick_and_flush_notifications():
+            client._event_loop = asyncio.get_running_loop()
+            adapter._simulator._run_unlock_flow_tick(now=1.0)
+            await asyncio.sleep(0)
+
+        self.run_async(run_unlock_tick_and_flush_notifications())
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, '*')
+        self.assertEqual(sent[0].method, 'PUMP')
+        self.assertEqual(sent[0].args, ['1', 'in-use'])
 
     def test_integration_clear_preauth_uses_local_site_id_and_matching_fsc_id(self):
         client = self.create_client(access_key='key', secret='secret')

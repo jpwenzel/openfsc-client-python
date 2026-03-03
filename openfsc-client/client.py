@@ -48,6 +48,10 @@ class OpenFscClient:
         if callable(register_transaction_notification_handler):
             register_transaction_notification_handler(self._on_completed_unlock_transaction)
 
+        register_pump_status_notification_handler = getattr(self.pos_adapter, 'set_pump_status_notification_handler', None)
+        if callable(register_pump_status_notification_handler):
+            register_pump_status_notification_handler(self._on_pump_status_changed)
+
     def next_client_tag(self) -> str:
         tag = f'C{self.tagged_message_counter}'
         self.tagged_message_counter += 1
@@ -141,6 +145,33 @@ class OpenFscClient:
                 self.logger.exception(
                     'Failed to send completed pre-auth TRANSACTION notification for pump %d',
                     transaction.pump_number,
+                )
+
+        future.add_done_callback(_log_notification_result)
+
+    def _on_pump_status_changed(self, pump_number: int, status: str):
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            self.logger.warning(
+                'Skipping PUMP notification for pump %d (%s): no active event loop',
+                pump_number,
+                status,
+            )
+            return
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.send_notification('PUMP', str(pump_number), status),
+            loop,
+        )
+
+        def _log_notification_result(done_future):
+            try:
+                done_future.result()
+            except Exception:
+                self.logger.exception(
+                    'Failed to send PUMP notification for pump %d (%s)',
+                    pump_number,
+                    status,
                 )
 
         future.add_done_callback(_log_notification_result)
