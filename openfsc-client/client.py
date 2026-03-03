@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from importlib import import_module
 from typing import Any
@@ -40,6 +41,11 @@ class OpenFscClient:
         self.state = ConnectionState.DISCONNECTED
         self.ws_connection: Any | None = None
         self.auth_skipped = False
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+
+        register_transaction_notification_handler = getattr(self.pos_adapter, 'set_transaction_notification_handler', None)
+        if callable(register_transaction_notification_handler):
+            register_transaction_notification_handler(self._on_completed_unlock_transaction)
 
     def next_client_tag(self) -> str:
         tag = f'C{self.tagged_message_counter}'
@@ -76,6 +82,45 @@ class OpenFscClient:
 
     async def send_err(self, server_tag: str, code: int, message: str):
         await self.send(ProtocolMessage(server_tag, 'ERR', [str(code), message]))
+
+    async def send_transaction_notification(self, transaction):
+        await self.send_notification(
+            'TRANSACTION',
+            str(transaction.pump_number),
+            transaction.site_transaction_id,
+            transaction.status,
+            transaction.product_id,
+            transaction.currency,
+            f'{transaction.price_with_vat:.2f}',
+            f'{transaction.price_without_vat:.2f}',
+            f'{transaction.vat_rate:.1f}',
+            f'{transaction.vat_amount:.2f}',
+            transaction.unit,
+            f'{transaction.volume:.2f}',
+            f'{transaction.price_per_unit:.3f}',
+        )
+
+    def _on_completed_unlock_transaction(self, transaction):
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            self.logger.warning(
+                'Skipping completed pre-auth TRANSACTION notification for pump %d: no active event loop',
+                transaction.pump_number,
+            )
+            return
+
+        future = asyncio.run_coroutine_threadsafe(self.send_transaction_notification(transaction), loop)
+
+        def _log_notification_result(done_future):
+            try:
+                done_future.result()
+            except Exception:
+                self.logger.exception(
+                    'Failed to send completed pre-auth TRANSACTION notification for pump %d',
+                    transaction.pump_number,
+                )
+
+        future.add_done_callback(_log_notification_result)
 
     async def start_handshake(self):
         self.state = ConnectionState.HANDSHAKE
@@ -377,6 +422,8 @@ class OpenFscClient:
             await self.send_err(tag, result.error_code or 500, result.error_message or 'Internal server error')
 
     async def handle_incoming(self, raw: str):
+        self._event_loop = asyncio.get_running_loop()
+
         try:
             message = parse_message(raw)
         except ValueError as exc:
@@ -400,6 +447,7 @@ class OpenFscClient:
 
     async def run_session(self):
         async with websockets.connect(self.fsc_url) as websocket:
+            self._event_loop = asyncio.get_running_loop()
             self.ws_connection = websocket
             self.tagged_message_counter = 0
             self.pending_requests = {}

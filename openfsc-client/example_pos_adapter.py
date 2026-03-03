@@ -1,6 +1,7 @@
 import logging
 import random
 import threading
+from collections.abc import Callable
 from datetime import date
 from typing import Optional
 
@@ -28,6 +29,7 @@ class ExamplePosAdapter(PosAdapter):
 
         self._state_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._transaction_notification_handler: Callable[[Transaction], None] | None = None
 
         self.products: list[Product] = [
             Product(
@@ -130,9 +132,20 @@ class ExamplePosAdapter(PosAdapter):
             open_transactions=self.open_transactions,
             products=self.products,
             create_transaction_for_pump=self._create_random_ready_to_pay_transaction,
+            create_transaction_for_unlock=self._create_unlock_transaction,
+            notify_completed_unlock_transaction=self._on_completed_unlock_transaction,
         )
         self._simulator.start_price_simulation()
         self._simulator.start_pump_traffic_simulation()
+        self._simulator.start_unlock_flow_simulation()
+
+    def set_transaction_notification_handler(self, handler: Callable[[Transaction], None]):
+        self._transaction_notification_handler = handler
+
+    def _on_completed_unlock_transaction(self, transaction: Transaction):
+        handler = self._transaction_notification_handler
+        if callable(handler):
+            handler(transaction)
 
     def _next_site_transaction_id(self) -> str:
         return f'TX-{date.today().isoformat()}-{random.randint(0, 999999):06d}'
@@ -157,6 +170,51 @@ class ExamplePosAdapter(PosAdapter):
             unit=product.unit,
             volume=volume,
             price_per_unit=product.price_per_unit,
+        )
+
+    def _create_unlock_transaction(
+        self,
+        pump_number: int,
+        fsc_transaction_id: str,
+        credit: float,
+        product_ids: Optional[list[str]],
+    ) -> Transaction:
+        allowed_products = self.products
+        if product_ids:
+            mapped = [product for product in self.products if product.product_id in set(product_ids)]
+            if mapped:
+                allowed_products = mapped
+
+        product = random.choice(allowed_products)
+        if credit <= 0:
+            target_gross = product.price_per_unit
+        else:
+            target_gross = credit * random.uniform(0.55, 0.95)
+
+        volume = max(0.01, round(target_gross / product.price_per_unit, 2))
+        price_with_vat = round(volume * product.price_per_unit, 2)
+
+        if credit > 0 and price_with_vat > credit:
+            volume = max(0.01, round(credit / product.price_per_unit, 2))
+            price_with_vat = round(volume * product.price_per_unit, 2)
+
+        price_without_vat = round(price_with_vat / (1 + product.vat_rate / 100), 2)
+        vat_amount = round(price_with_vat - price_without_vat, 2)
+
+        return Transaction(
+            pump_number=pump_number,
+            site_transaction_id=self._next_site_transaction_id(),
+            status='open',
+            product_id=product.product_id,
+            currency=product.currency,
+            price_with_vat=price_with_vat,
+            price_without_vat=price_without_vat,
+            vat_rate=product.vat_rate,
+            vat_amount=vat_amount,
+            unit=product.unit,
+            volume=volume,
+            price_per_unit=product.price_per_unit,
+            fsc_transaction_id=fsc_transaction_id,
         )
 
     def get_products(self) -> list[Product]:
@@ -225,11 +283,13 @@ class ExamplePosAdapter(PosAdapter):
             if pump_number not in self.pump_states:
                 return UnlockPumpResult(success=False, error_code=404, error_message='Pump unknown')
 
-            if self.pump_states[pump_number] == 'locked':
-                return UnlockPumpResult(success=False, error_code=412, error_message='Pump is already locked on site')
+            if self.pump_states[pump_number] in {'in-use', 'ready-to-pay'}:
+                return UnlockPumpResult(success=False, error_code=412, error_message='Pump is already in transaction flow')
 
-            # Simulate unlocking
-            self.pump_states[pump_number] = 'locked'
+            if self.pump_states[pump_number] != 'locked':
+                return UnlockPumpResult(success=False, error_code=412, error_message='Pump is not locked on site')
+
+        self._simulator.on_unlock_pump_authorized(pump_number, fsc_transaction_id, credit, product_ids)
         return UnlockPumpResult(success=True)
 
     def lock_pump(self, pump_number: int) -> LockPumpResult:
@@ -244,6 +304,8 @@ class ExamplePosAdapter(PosAdapter):
 
             # Simulate locking
             self.pump_states[pump_number] = 'locked'
+
+        self._simulator.on_pump_locked(pump_number)
         return LockPumpResult(success=True)
 
     def clear_transaction(
@@ -271,6 +333,13 @@ class ExamplePosAdapter(PosAdapter):
             if tx.site_transaction_id != site_transaction_id:
                 return ClearTransactionResult(
                     success=False, error_code=404, error_message='Pump and SiteTransactionID unknown'
+                )
+
+            if tx.fsc_transaction_id is not None and tx.fsc_transaction_id != fsc_transaction_id:
+                return ClearTransactionResult(
+                    success=False,
+                    error_code=404,
+                    error_message='Pump, SiteTransactionID and FSCTransactionID mismatch',
                 )
 
             # Simulate clearing

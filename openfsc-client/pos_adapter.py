@@ -34,6 +34,7 @@ class Transaction:
     unit: str
     volume: float
     price_per_unit: float
+    fsc_transaction_id: Optional[str] = None
 
 
 @dataclass

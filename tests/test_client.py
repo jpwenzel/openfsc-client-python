@@ -177,6 +177,163 @@ class ClientHandlerTests(unittest.TestCase):
         self.assertEqual(sent[0].method, 'ERR')
         self.assertEqual(sent[0].args[0], '404')
 
+    def test_integration_unlockpump_unknown_pump_returns_404(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(
+            client.handle_incoming(
+                'S24 UNLOCKPUMP 999 EUR 10.0 12345678-1234-1234-1234-123456789012 pace\r\n'
+            )
+        )
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S24')
+        self.assertEqual(sent[0].method, 'ERR')
+        self.assertEqual(sent[0].args[0], '404')
+
+    def test_integration_lockpump_unknown_pump_returns_404(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(client.handle_incoming('S25 LOCKPUMP 999\r\n'))
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S25')
+        self.assertEqual(sent[0].method, 'ERR')
+        self.assertEqual(sent[0].args[0], '404')
+
+    def test_integration_clear_unknown_pump_returns_404(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(
+            client.handle_incoming(
+                'S26 CLEAR 999 TX-2026-03-03-000001 12345678-1234-1234-1234-123456789012 pace\r\n'
+            )
+        )
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S26')
+        self.assertEqual(sent[0].method, 'ERR')
+        self.assertEqual(sent[0].args[0], '404')
+
+    def test_integration_unlockpump_preauth_flow_for_pump_1(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+        fsc_transaction_id = '8dad9fe7-3cc5-4baa-95b3-cb6611361737'
+
+        self.run_async(
+            client.handle_incoming(
+                f'S20 UNLOCKPUMP 1 EUR 15.0 {fsc_transaction_id} pace\r\n'
+            )
+        )
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[-1].tag, 'S20')
+        self.assertEqual(sent[-1].method, 'OK')
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S21 PUMPSTATUS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[0].method, 'PUMP')
+        self.assertEqual(sent[0].args, ['1', 'in-use'])
+        self.assertEqual(sent[1].tag, 'S21')
+        self.assertEqual(sent[1].method, 'OK')
+
+        adapter = client.pos_adapter
+        with adapter._state_lock:
+            adapter._simulator._pending_unlock_by_pump[1]['complete_at'] = 0.0
+        adapter._simulator._run_unlock_flow_tick(now=1.0)
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S22 PUMPSTATUS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[0].method, 'PUMP')
+        self.assertEqual(sent[0].args, ['1', 'locked'])
+        self.assertEqual(sent[1].tag, 'S22')
+        self.assertEqual(sent[1].method, 'OK')
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S23 TRANSACTIONS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[0].method, 'TRANSACTION')
+        self.assertEqual(sent[0].args[0], '1')
+        self.assertRegex(sent[0].args[1], r'^TX-\d{4}-\d{2}-\d{2}-\d{6}$')
+        self.assertEqual(sent[0].args[2], 'open')
+        self.assertEqual(sent[1].tag, 'S23')
+        self.assertEqual(sent[1].method, 'OK')
+
+    def test_integration_clear_preauth_uses_local_site_id_and_matching_fsc_id(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+        fsc_transaction_id = '70644955-ef32-4d33-a88b-67b500a7c00d'
+
+        self.run_async(
+            client.handle_incoming(
+                f'S30 UNLOCKPUMP 1 EUR 20.0 {fsc_transaction_id} pace\r\n'
+            )
+        )
+
+        adapter = client.pos_adapter
+        with adapter._state_lock:
+            adapter._simulator._pending_unlock_by_pump[1]['complete_at'] = 0.0
+        adapter._simulator._run_unlock_flow_tick(now=1.0)
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S31 TRANSACTIONS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[0].method, 'TRANSACTION')
+        site_transaction_id = sent[0].args[1]
+        self.assertRegex(site_transaction_id, r'^TX-\d{4}-\d{2}-\d{2}-\d{6}$')
+        self.assertEqual(sent[0].args[2], 'open')
+
+        client.ws_connection.sent = []
+        self.run_async(
+            client.handle_incoming(
+                f'S32 CLEAR 1 {site_transaction_id} {fsc_transaction_id} pace\r\n'
+            )
+        )
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S32')
+        self.assertEqual(sent[0].method, 'OK')
+
+    def test_integration_clear_preauth_rejects_mismatching_fsc_id(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+        fsc_transaction_id = '70644955-ef32-4d33-a88b-67b500a7c00d'
+
+        self.run_async(
+            client.handle_incoming(
+                f'S40 UNLOCKPUMP 1 EUR 20.0 {fsc_transaction_id} pace\r\n'
+            )
+        )
+
+        adapter = client.pos_adapter
+        with adapter._state_lock:
+            adapter._simulator._pending_unlock_by_pump[1]['complete_at'] = 0.0
+        adapter._simulator._run_unlock_flow_tick(now=1.0)
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S41 TRANSACTIONS 1\r\n'))
+        sent = self.parse_sent(client)
+        site_transaction_id = sent[0].args[1]
+
+        client.ws_connection.sent = []
+        self.run_async(
+            client.handle_incoming(
+                f'S42 CLEAR 1 {site_transaction_id} 00000000-0000-0000-0000-000000000000 pace\r\n'
+            )
+        )
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S42')
+        self.assertEqual(sent[0].method, 'ERR')
+        self.assertEqual(sent[0].args[0], '404')
+
     def test_capability_without_credentials_skips_auth(self):
         client = self.create_client()
 
