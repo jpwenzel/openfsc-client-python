@@ -42,6 +42,7 @@ class OpenFscClient:
         self.ws_connection: Any | None = None
         self.auth_skipped = False
         self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._shutdown_quit_sent = False
 
         register_transaction_notification_handler = getattr(self.pos_adapter, 'set_transaction_notification_handler', None)
         if callable(register_transaction_notification_handler):
@@ -99,6 +100,28 @@ class OpenFscClient:
             f'{transaction.volume:.2f}',
             f'{transaction.price_per_unit:.3f}',
         )
+
+    async def send_quit_for_shutdown(self, reason: str = 'Client shutdown'):
+        if self._shutdown_quit_sent:
+            return
+
+        connection = self.ws_connection
+        if connection is None:
+            return
+
+        self._shutdown_quit_sent = True
+
+        if not bool(getattr(connection, 'closed', False)):
+            try:
+                await asyncio.shield(self.send_notification('QUIT', reason))
+            except Exception:
+                self.logger.warning('Failed to send QUIT during shutdown', exc_info=True)
+
+        try:
+            if not bool(getattr(connection, 'closed', False)):
+                await asyncio.shield(connection.close())
+        except Exception:
+            self.logger.warning('Failed to close websocket during shutdown', exc_info=True)
 
     def _on_completed_unlock_transaction(self, transaction):
         loop = self._event_loop
@@ -456,10 +479,15 @@ class OpenFscClient:
 
             await self.start_handshake()
 
-            async for raw in websocket:
-                if isinstance(raw, bytes):
-                    raw = raw.decode('utf-8', errors='replace')
-                await self.handle_incoming(raw)
+            try:
+                async for raw in websocket:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode('utf-8', errors='replace')
+                    await self.handle_incoming(raw)
+            except asyncio.CancelledError:
+                self.logger.info('Session receive loop canceled, shutting down')
+                await self.send_quit_for_shutdown('Client shutdown')
+                raise
 
     async def main(self):
         self.state = ConnectionState.DISCONNECTED

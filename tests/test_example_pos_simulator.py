@@ -350,6 +350,12 @@ class ExamplePosSimulatorTests(unittest.TestCase):
         simulator._run_unlock_flow_tick(now=1006.0)
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].site_transaction_id, 'fsc-789')
+        self.assertIn(1, open_transactions)
+        self.assertEqual(pump_states[1], 'locked')
+
+        simulator._run_unlock_flow_tick(now=1008.1)
+        self.assertNotIn(1, open_transactions)
+        self.assertEqual(pump_states[1], 'locked')
 
     def test_unlock_flow_tick_completes_to_locked_transaction(self):
         simulator, pump_states, open_transactions, _ = self.create_simulator()

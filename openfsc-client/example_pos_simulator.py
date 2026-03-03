@@ -75,15 +75,14 @@ class ExamplePosSimulator:
                 self._fallback_deadline_by_pump[pump_number] = selection_deadline
 
     def on_transaction_cleared(self, pump_number: int):
-        if pump_number not in self._traffic_pumps:
-            return
-
         with self._state_lock:
             self._selection_deadline_by_pump.pop(pump_number, None)
             self._fallback_deadline_by_pump.pop(pump_number, None)
             self._pending_unlock_by_pump.pop(pump_number, None)
             self._pending_unlock_notification_by_pump.pop(pump_number, None)
-            self._creation_not_before_by_pump[pump_number] = time.monotonic() + random.uniform(15, 30)
+
+            if pump_number in self._traffic_pumps:
+                self._creation_not_before_by_pump[pump_number] = time.monotonic() + random.uniform(15, 30)
 
     def on_unlock_pump_authorized(
         self,
@@ -243,18 +242,42 @@ class ExamplePosSimulator:
                 self._pending_unlock_notification_by_pump[pump_number] = {
                     'transaction': transaction,
                     'notify_at': now + 1.0,
+                    'clear_at': now + 3.0,
+                    'notified': False,
                 }
                 completed_pumps.append(pump_number)
                 del self._pending_unlock_by_pump[pump_number]
 
             for pump_number, notification_data in list(self._pending_unlock_notification_by_pump.items()):
                 notify_at = notification_data.get('notify_at')
-                if not isinstance(notify_at, (int, float)) or now < notify_at:
+                transaction = notification_data.get('transaction')
+                if (
+                    isinstance(notify_at, (int, float))
+                    and isinstance(transaction, Transaction)
+                    and not bool(notification_data.get('notified'))
+                    and now >= notify_at
+                ):
+                    due_notifications.append(transaction)
+                    notification_data['notified'] = True
+
+                clear_at = notification_data.get('clear_at')
+                if not isinstance(clear_at, (int, float)) or now < clear_at:
                     continue
 
-                transaction = notification_data.get('transaction')
                 if isinstance(transaction, Transaction):
-                    due_notifications.append(transaction)
+                    current_transaction = self.open_transactions.get(pump_number)
+                    if (
+                        isinstance(current_transaction, Transaction)
+                        and current_transaction.site_transaction_id == transaction.site_transaction_id
+                    ):
+                        del self.open_transactions[pump_number]
+                        self.pump_states[pump_number] = 'locked'
+                        self.logger.info(
+                            '[POS] simulated pre-auth transaction auto-cleared at pump %d (site_tx=%s)',
+                            pump_number,
+                            transaction.site_transaction_id,
+                        )
+
                 del self._pending_unlock_notification_by_pump[pump_number]
 
         for pump_number in completed_pumps:

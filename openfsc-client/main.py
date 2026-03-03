@@ -1,6 +1,8 @@
 import asyncio
 import importlib
+import logging
 import os
+import signal
 
 from client import OpenFscClient
 from config import OpenFscConfig
@@ -42,7 +44,18 @@ async def run() -> None:
 
 
 def main() -> None:
-    asyncio.run(run())
+    def _raise_keyboard_interrupt(signum, frame):
+        raise KeyboardInterrupt()
+
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
+    try:
+        signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        logging.getLogger('openfsc-client').info('Shutdown requested (Ctrl+C), exiting gracefully')
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 if __name__ == '__main__':

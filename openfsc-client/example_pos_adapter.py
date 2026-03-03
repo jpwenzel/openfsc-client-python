@@ -203,7 +203,7 @@ class ExamplePosAdapter(PosAdapter):
 
         return Transaction(
             pump_number=pump_number,
-            site_transaction_id=self._next_site_transaction_id(),
+            site_transaction_id=fsc_transaction_id,
             status='open',
             product_id=product.product_id,
             currency=product.currency,
@@ -344,7 +344,10 @@ class ExamplePosAdapter(PosAdapter):
 
             # Simulate clearing
             del self.open_transactions[pump_number]
-            self.pump_states[pump_number] = 'free'
+            if tx.fsc_transaction_id is not None:
+                self.pump_states[pump_number] = 'locked'
+            else:
+                self.pump_states[pump_number] = 'free'
 
         self.on_transaction_cleared(pump_number)
         return ClearTransactionResult(success=True)

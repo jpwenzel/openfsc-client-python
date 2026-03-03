@@ -256,15 +256,26 @@ class ClientHandlerTests(unittest.TestCase):
         self.assertEqual(sent[1].tag, 'S22')
         self.assertEqual(sent[1].method, 'OK')
 
+        adapter._simulator._run_unlock_flow_tick(now=2.0)
+
         client.ws_connection.sent = []
         self.run_async(client.handle_incoming('S23 TRANSACTIONS 1\r\n'))
         sent = self.parse_sent(client)
         self.assertEqual(sent[0].method, 'TRANSACTION')
         self.assertEqual(sent[0].args[0], '1')
-        self.assertRegex(sent[0].args[1], r'^TX-\d{4}-\d{2}-\d{2}-\d{6}$')
+        self.assertEqual(sent[0].args[1], fsc_transaction_id)
         self.assertEqual(sent[0].args[2], 'open')
         self.assertEqual(sent[1].tag, 'S23')
         self.assertEqual(sent[1].method, 'OK')
+
+        adapter._simulator._run_unlock_flow_tick(now=4.1)
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S24 TRANSACTIONS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].tag, 'S24')
+        self.assertEqual(sent[0].method, 'OK')
 
     def test_integration_clear_preauth_uses_local_site_id_and_matching_fsc_id(self):
         client = self.create_client(access_key='key', secret='secret')
@@ -287,7 +298,7 @@ class ClientHandlerTests(unittest.TestCase):
         sent = self.parse_sent(client)
         self.assertEqual(sent[0].method, 'TRANSACTION')
         site_transaction_id = sent[0].args[1]
-        self.assertRegex(site_transaction_id, r'^TX-\d{4}-\d{2}-\d{2}-\d{6}$')
+        self.assertEqual(site_transaction_id, fsc_transaction_id)
         self.assertEqual(sent[0].args[2], 'open')
 
         client.ws_connection.sent = []
@@ -300,6 +311,14 @@ class ClientHandlerTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0].tag, 'S32')
         self.assertEqual(sent[0].method, 'OK')
+
+        client.ws_connection.sent = []
+        self.run_async(client.handle_incoming('S33 PUMPSTATUS 1\r\n'))
+        sent = self.parse_sent(client)
+        self.assertEqual(sent[0].method, 'PUMP')
+        self.assertEqual(sent[0].args, ['1', 'locked'])
+        self.assertEqual(sent[1].tag, 'S33')
+        self.assertEqual(sent[1].method, 'OK')
 
     def test_integration_clear_preauth_rejects_mismatching_fsc_id(self):
         client = self.create_client(access_key='key', secret='secret')
