@@ -1,5 +1,10 @@
 import logging
+import random
+import threading
+from datetime import date
 from typing import Optional
+
+from example_pos_simulator import ExamplePosSimulator
 
 from pos_adapter import (
     ClearTransactionResult,
@@ -21,19 +26,27 @@ class ExamplePosAdapter(PosAdapter):
         if not self.logger.handlers:
             self.logger.addHandler(logging.StreamHandler())
 
+        site_transaction_id = f'TX-{date.today().isoformat()}-{random.randint(0, 999999):06d}'
+        self._state_lock = threading.Lock()
+        self._stop_event = threading.Event()
+
         # Simulated state
         self.pump_states = {
             1: 'free',
             2: 'free',
-            3: 'in-use',
+            3: 'free',
             4: 'ready-to-pay',
+            11: 'locked',
+            12: 'locked',
+            13: 'locked',
+            14: 'locked',
         }
         self.open_transactions: dict[int, Transaction] = {
             4: Transaction(
                 pump_number=4,
-                site_transaction_id='TX-2026-02-26-001',
+                site_transaction_id=site_transaction_id,
                 status='open',
-                product_id='0100',
+                product_id='0300',
                 currency='EUR',
                 price_with_vat=86.83,
                 price_without_vat=72.98,
@@ -45,31 +58,105 @@ class ExamplePosAdapter(PosAdapter):
             )
         }
 
-    def get_products(self) -> list[Product]:
-        self.logger.info('[POS] get_products() called')
-        return [
+        self.products: list[Product] = [
             Product(
                 product_id='0100',
+                product_type='ron95e5',
+                vat_rate=19.0,
                 unit='LTR',
                 currency='EUR',
-                price_per_unit=1.596,
-                description='Super Plus',
+                price_per_unit=1.749,
+                description='Super E5',
             ),
             Product(
                 product_id='0200',
+                product_type='ron95e10',
+                vat_rate=19.0,
                 unit='LTR',
                 currency='EUR',
-                price_per_unit=1.489,
-                description='Super 95',
+                price_per_unit=1.689,
+                description='Super E10',
             ),
             Product(
                 product_id='0300',
+                product_type='ron98e5',
+                vat_rate=19.0,
                 unit='LTR',
                 currency='EUR',
-                price_per_unit=1.449,
-                description='Diesel',
+                price_per_unit=1.869,
+                description='Super 98',
+            ),
+            Product(
+                product_id='0400',
+                product_type='ron100',
+                vat_rate=19.0,
+                unit='LTR',
+                currency='EUR',
+                price_per_unit=2.019,
+                description='Power Fuel 100',
+            ),
+            Product(
+                product_id='0500',
+                product_type='dieselB7',
+                vat_rate=19.0,
+                unit='LTR',
+                currency='EUR',
+                price_per_unit=1.629,
+                description='Efficiency Diesel',
+            ),
+            Product(
+                product_id='0600',
+                product_type='dieselB0',
+                vat_rate=19.0,
+                unit='LTR',
+                currency='EUR',
+                price_per_unit=1.699,
+                description='Pure Diesel',
+            ),
+            Product(
+                product_id='0700',
+                product_type='dieselHvo',
+                vat_rate=19.0,
+                unit='LTR',
+                currency='EUR',
+                price_per_unit=1.799,
+                description='HVO Diesel',
+            ),
+            Product(
+                product_id='0800',
+                product_type='lpg',
+                vat_rate=19.0,
+                unit='LTR',
+                currency='EUR',
+                price_per_unit=0.999,
+                description='LPG',
             ),
         ]
+        self._simulator = ExamplePosSimulator(
+            logger=self.logger,
+            state_lock=self._state_lock,
+            stop_event=self._stop_event,
+            pump_states=self.pump_states,
+            open_transactions=self.open_transactions,
+            products=self.products,
+        )
+        self._simulator.start_price_simulation()
+
+    def get_products(self) -> list[Product]:
+        self.logger.info('[POS] get_products() called')
+        with self._state_lock:
+            return [
+                Product(
+                    product_id=product.product_id,
+                    product_type=product.product_type,
+                    vat_rate=product.vat_rate,
+                    unit=product.unit,
+                    currency=product.currency,
+                    price_per_unit=product.price_per_unit,
+                    description=product.description,
+                )
+                for product in self.products
+            ]
 
     def get_pumps(self) -> list[Pump]:
         self.logger.info('[POS] get_pumps() called')

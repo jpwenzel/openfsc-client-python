@@ -25,6 +25,7 @@ load_module('config', 'config.py')
 load_module('state', 'state.py')
 protocol_module = load_module('protocol', 'protocol.py')
 load_module('pos_adapter', 'pos_adapter.py')
+load_module('example_pos_simulator', 'example_pos_simulator.py')
 example_pos_adapter_module = load_module('example_pos_adapter', 'example_pos_adapter.py')
 sys.modules.setdefault('websockets', types.SimpleNamespace(connect=None))
 client_module = load_module('client', 'client.py')
@@ -109,9 +110,56 @@ class ClientHandlerTests(unittest.TestCase):
         )
 
         sent = self.parse_sent(client)
-        self.assertEqual(len(sent), 4)
-        self.assertEqual([m.method for m in sent[:-1]], ['PRICE', 'PRICE', 'PRICE'])
+        self.assertEqual(len(sent), 9)
+        self.assertEqual([m.method for m in sent[:-1]], ['PRICE'] * 8)
+        self.assertEqual(sent[0].args[0], '0100')
         self.assertEqual(sent[-1].tag, 'S2')
+        self.assertEqual(sent[-1].method, 'OK')
+
+    def test_products_returns_notifications_and_ok_when_authenticated(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(
+            client.handle_server_request(
+                ProtocolMessage(tag='S9', method='PRODUCTS', args=[])
+            )
+        )
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 9)
+        self.assertEqual([m.method for m in sent[:-1]], ['PRODUCT'] * 8)
+        self.assertEqual(sent[0].args[0], '0100')
+        self.assertEqual(sent[0].args[1], 'ron95e5')
+        self.assertEqual(sent[-1].tag, 'S9')
+        self.assertEqual(sent[-1].method, 'OK')
+
+    def test_integration_handle_incoming_products_request(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(client.handle_incoming('S10 PRODUCTS\r\n'))
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 9)
+        self.assertEqual([m.method for m in sent[:-1]], ['PRODUCT'] * 8)
+        self.assertEqual(sent[0].args[:2], ['0100', 'ron95e5'])
+        self.assertEqual(sent[-2].args[:2], ['0800', 'lpg'])
+        self.assertEqual(sent[-1].tag, 'S10')
+        self.assertEqual(sent[-1].method, 'OK')
+
+    def test_integration_handle_incoming_prices_request(self):
+        client = self.create_client(access_key='key', secret='secret')
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(client.handle_incoming('S11 PRICES\r\n'))
+
+        sent = self.parse_sent(client)
+        self.assertEqual(len(sent), 9)
+        self.assertEqual([m.method for m in sent[:-1]], ['PRICE'] * 8)
+        self.assertEqual(sent[0].args[0], '0100')
+        self.assertEqual(sent[-2].args[0], '0800')
+        self.assertEqual(sent[-1].tag, 'S11')
         self.assertEqual(sent[-1].method, 'OK')
 
     def test_pumpstatus_unknown_pump_returns_404(self):

@@ -26,6 +26,7 @@ class OpenFscClient:
             'HEARTBEAT',
             'LOCKPUMP',
             'PRICES',
+            'PRODUCTS',
             'PUMPS',
             'PUMPSTATUS',
             'QUIT',
@@ -165,6 +166,8 @@ class OpenFscClient:
         # Dispatch to authenticated handlers
         if message.method == 'PRICES':
             await self.handle_prices_request(message.tag)
+        elif message.method == 'PRODUCTS':
+            await self.handle_products_request(message.tag)
         elif message.method == 'PUMPS':
             await self.handle_pumps_request(message.tag)
         elif message.method == 'PUMPSTATUS':
@@ -190,6 +193,20 @@ class OpenFscClient:
                 product.unit,
                 product.currency,
                 f'{product.price_per_unit:.3f}',
+                product.description,
+            )
+        await self.send_ok(tag)
+
+    async def handle_products_request(self, tag: str):
+        """Handle PRODUCTS request - send PRODUCT notifications for all products."""
+        products = self.pos_adapter.get_products()
+        for product in products:
+            await self.send_notification(
+                'PRODUCT',
+                product.product_id,
+                product.product_type,
+                f'{product.vat_rate:.1f}',
+                product.unit,
                 product.description,
             )
         await self.send_ok(tag)

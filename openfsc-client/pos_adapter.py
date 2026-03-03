@@ -6,6 +6,8 @@ from typing import Optional
 @dataclass
 class Product:
     product_id: str
+    product_type: str  # OpenFSC product mapping category, e.g., 'ron95e5', 'dieselB7'
+    vat_rate: float
     unit: str  # e.g., 'LTR'
     currency: str  # e.g., 'EUR'
     price_per_unit: float
