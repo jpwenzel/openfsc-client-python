@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openfsc-client-config
+data:
+  OPENFSC_URL: wss://fsc.sandbox.euca.pacelink.net/ws/text
+  POS_ADAPTER_CLASS: example_pos_adapter.ExamplePosAdapter

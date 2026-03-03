@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openfsc-client
+  labels:
+    app: openfsc-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openfsc-client
+  template:
+    metadata:
+      labels:
+        app: openfsc-client
+    spec:
+      containers:
+        - name: openfsc-client
+          image: openfsc-client-python:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: openfsc-client-config
+            - secretRef:
+                name: openfsc-client-secret
