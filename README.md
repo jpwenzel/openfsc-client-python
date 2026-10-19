@@ -25,6 +25,18 @@ If you prefer Podman, you can use `podman` in place of `docker` for the commands
    - `OPENFSC_SITE_SECRET` - Your site secret
    - `OPENFSC_URL` (optional) - Server URL (defaults to sandbox)
    - `POS_ADAPTER_CLASS` (optional) - Adapter plugin class (`module_name.ClassName`)
+   - `OPENFSC_RECONNECT_INITIAL_DELAY` (optional, default `1`) - First reconnect delay in seconds
+   - `OPENFSC_RECONNECT_MAX_DELAY` (optional, default `60`) - Upper limit for the reconnect delay in seconds
+   - `OPENFSC_RECONNECT_MAX_RETRIES` (optional, default `0` = unlimited) - Exit with status 1 after this many consecutive failed attempts
+
+### Reconnect behaviour
+
+The client keeps the connection to the OpenFSC server up on its own:
+
+- After any disconnect (server `QUIT`, network error, server restart) it reconnects with exponential back-off: 1 s, 2 s, 4 s, ... up to the maximum delay. Each delay is randomised between half and the full value, so many sites do not reconnect at the same moment.
+- Once a session authenticates successfully, the back-off and the failure counter start over. A server `QUIT` after a healthy session therefore leads to a reconnect within about a second.
+- If `PLAINAUTH` is rejected, the client retries at the maximum delay only. Hammering the server with wrong credentials does not help and may get the site blocked.
+- By default it never gives up, since a station connector should recover on its own after an outage. Set `OPENFSC_RECONNECT_MAX_RETRIES` only if a supervisor (Docker restart policy, Kubernetes) should take over instead.
 
 3. Start the container:
 
