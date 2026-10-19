@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from importlib import import_module
 from typing import Any
 
@@ -9,6 +10,33 @@ from protocol import ProtocolMessage, is_rfc3339, now_rfc3339_utc, parse_message
 from state import ConnectionState
 
 websockets = import_module('websockets')
+
+
+class ReconnectLimitReached(RuntimeError):
+    """Raised when OPENFSC_RECONNECT_MAX_RETRIES consecutive attempts failed."""
+
+
+class ReconnectBackoff:
+    """Exponential back-off with jitter.
+
+    The nominal delay doubles per consecutive failure (initial, 2x, 4x, ...) up to
+    max_delay. The actual delay is drawn from [nominal/2, nominal] so that many
+    sites do not reconnect in lockstep after a server restart.
+    """
+
+    def __init__(self, initial_delay: float, max_delay: float, rng: random.Random | None = None):
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
+        self.attempt = 0
+        self._rng = rng or random.Random()
+
+    def reset(self):
+        self.attempt = 0
+
+    def next_delay(self) -> float:
+        nominal = min(self.max_delay, self.initial_delay * (2 ** self.attempt))
+        self.attempt += 1
+        return self._rng.uniform(nominal / 2, nominal)
 
 
 class OpenFscClient:
@@ -43,6 +71,12 @@ class OpenFscClient:
         self.auth_skipped = False
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._shutdown_quit_sent = False
+
+        self.reconnect_max_retries = config.reconnect_max_retries
+        self.backoff = ReconnectBackoff(config.reconnect_initial_delay, config.reconnect_max_delay)
+        self._sleep = asyncio.sleep
+        self._session_authenticated = False
+        self._auth_failed = False
 
         register_transaction_notification_handler = getattr(self.pos_adapter, 'set_transaction_notification_handler', None)
         if callable(register_transaction_notification_handler):
@@ -209,6 +243,7 @@ class OpenFscClient:
                 return
             if purpose == 'plainauth':
                 self.state = ConnectionState.AUTHENTICATED
+                self._session_authenticated = True
                 self.logger.info('OpenFSC session is authenticated')
                 return
             return
@@ -224,6 +259,7 @@ class OpenFscClient:
 
             if purpose == 'plainauth':
                 self.logger.error('PLAINAUTH failed (%s): %s', err_code, err_message)
+                self._auth_failed = True
                 await self.send_notification('QUIT', 'Authentication failed')
                 await self.require_connection().close()
                 return
@@ -501,6 +537,9 @@ class OpenFscClient:
         self.logger.error('Unknown tag received: %s', message.tag)
 
     async def run_session(self):
+        self._session_authenticated = False
+        self._auth_failed = False
+        self._shutdown_quit_sent = False
         async with websockets.connect(self.fsc_url) as websocket:
             self._event_loop = asyncio.get_running_loop()
             self.ws_connection = websocket
@@ -521,6 +560,47 @@ class OpenFscClient:
                 await self.send_quit_for_shutdown('Client shutdown')
                 raise
 
+    def _next_reconnect_delay(self) -> float:
+        if self._session_authenticated:
+            # The session was healthy: start over with a short delay. This also
+            # covers a server-initiated QUIT (e.g. server restart or maintenance).
+            self.backoff.reset()
+        if self._auth_failed:
+            # Retrying wrong credentials quickly only adds noise (and may get the
+            # site blocked); try again at the slowest rate in case they get fixed.
+            self.backoff.attempt += 1
+            return self.backoff.max_delay
+        return self.backoff.next_delay()
+
     async def main(self):
-        self.state = ConnectionState.DISCONNECTED
-        await self.run_session()
+        """Run sessions forever, reconnecting with exponential back-off."""
+        consecutive_failures = 0
+        while True:
+            self.state = ConnectionState.DISCONNECTED
+            reason = 'connection closed'
+            try:
+                await self.run_session()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # network, TLS, handshake or handler errors
+                reason = f'{type(exc).__name__}: {exc}' if str(exc) else type(exc).__name__
+            finally:
+                self.ws_connection = None
+                self.state = ConnectionState.DISCONNECTED
+
+            if self._session_authenticated:
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+
+            if self.reconnect_max_retries and consecutive_failures > self.reconnect_max_retries:
+                raise ReconnectLimitReached(
+                    f'Giving up after {consecutive_failures} consecutive failed connection attempts ({reason})'
+                )
+
+            delay = self._next_reconnect_delay()
+            self.logger.warning(
+                'Disconnected (%s); reconnecting in %.1f s (consecutive failures: %d)',
+                reason, delay, consecutive_failures,
+            )
+            await self._sleep(delay)

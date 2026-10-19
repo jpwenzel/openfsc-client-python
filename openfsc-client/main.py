@@ -3,8 +3,9 @@ import importlib
 import logging
 import os
 import signal
+import sys
 
-from client import OpenFscClient
+from client import OpenFscClient, ReconnectLimitReached
 from config import OpenFscConfig
 from pos_adapter import PosAdapter
 
@@ -54,6 +55,9 @@ def main() -> None:
         asyncio.run(run())
     except KeyboardInterrupt:
         logging.getLogger('openfsc-client').info('Shutdown requested (Ctrl+C), exiting gracefully')
+    except ReconnectLimitReached as exc:
+        logging.getLogger('openfsc-client').error('%s', exc)
+        sys.exit(1)
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
