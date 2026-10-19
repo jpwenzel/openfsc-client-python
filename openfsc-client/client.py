@@ -5,7 +5,7 @@ from typing import Any
 
 from config import OpenFscConfig
 from pos_adapter import PosAdapter
-from protocol import ProtocolMessage, now_rfc3339_utc, parse_message, serialize_message
+from protocol import ProtocolMessage, is_rfc3339, now_rfc3339_utc, parse_message, serialize_message
 from state import ConnectionState
 
 websockets = import_module('websockets')
@@ -250,7 +250,8 @@ class OpenFscClient:
         self.logger.info('< [S-REQ #%5s] %s %s', message.tag[1:], message.method, ' '.join(message.args).strip())
 
         if message.method == 'HEARTBEAT':
-            if len(message.args) != 1:
+            # OpenFSC 1.0: HEARTBEAT carries an RFC 3339 timestamp; anything else is ERR 422.
+            if len(message.args) != 1 or not is_rfc3339(message.args[0]):
                 await self.send_err(message.tag, 422, 'Timestamp invalid')
                 return
 

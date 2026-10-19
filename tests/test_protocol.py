@@ -8,7 +8,7 @@ CLIENT_DIR = os.path.join(PROJECT_ROOT, 'openfsc-client')
 if CLIENT_DIR not in sys.path:
     sys.path.insert(0, CLIENT_DIR)
 
-from protocol import ProtocolMessage, parse_message, serialize_message
+from protocol import ProtocolMessage, is_rfc3339, parse_message, serialize_message
 
 
 class ProtocolTests(unittest.TestCase):
@@ -31,6 +31,14 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_invalid_message_raises(self):
         with self.assertRaises(ValueError):
             parse_message('BROKEN\r\n')
+
+    def test_is_rfc3339(self):
+        for valid in ('2026-02-26T10:00:00Z', '2019-11-13T08:00:05+01:00',
+                      '2026-02-26T10:00:00.123456Z', '2026-02-26t10:00:00z'):
+            self.assertTrue(is_rfc3339(valid), valid)
+        for invalid in ('yesterday', '', '2026-02-26', '2026-02-26T10:00:00',
+                        '2026-02-30T10:00:00Z', '2026-02-26T25:00:00Z', '1772100000'):
+            self.assertFalse(is_rfc3339(invalid), invalid)
 
 
 if __name__ == '__main__':

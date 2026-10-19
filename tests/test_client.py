@@ -84,6 +84,37 @@ class ClientHandlerTests(unittest.TestCase):
         self.assertEqual(sent[1].tag, 'S42')
         self.assertEqual(sent[1].method, 'OK')
 
+    def test_heartbeat_with_invalid_timestamp_returns_422(self):
+        for invalid in ('yesterday', '2026-02-26', '2026-02-26T10:00:00', '2026-13-26T10:00:00Z',
+                        '2026-02-26 10:00:00Z'):
+            with self.subTest(timestamp=invalid):
+                client = self.create_client()
+                client.state = ConnectionState.AUTHENTICATED
+
+                self.run_async(
+                    client.handle_server_request(
+                        ProtocolMessage(tag='S7', method='HEARTBEAT', args=[invalid])
+                    )
+                )
+
+                sent = self.parse_sent(client)
+                self.assertEqual(len(sent), 1)
+                self.assertEqual(sent[0].tag, 'S7')
+                self.assertEqual(sent[0].method, 'ERR')
+                self.assertEqual(sent[0].args[0], '422')
+
+    def test_heartbeat_with_offset_timestamp_is_accepted(self):
+        client = self.create_client()
+        client.state = ConnectionState.AUTHENTICATED
+
+        self.run_async(
+            client.handle_server_request(
+                ProtocolMessage(tag='S8', method='HEARTBEAT', args=['2019-11-13T08:00:05.123+01:00'])
+            )
+        )
+
+        self.assertEqual([m.method for m in self.parse_sent(client)], ['BEAT', 'OK'])
+
     def test_prices_rejected_when_not_authenticated(self):
         client = self.create_client()
         client.state = ConnectionState.HANDSHAKE
